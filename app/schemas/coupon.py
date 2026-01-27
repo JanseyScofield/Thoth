@@ -1,0 +1,1 @@
+# Pasta que vai conter as classes com os schemas (dto's) de cupons

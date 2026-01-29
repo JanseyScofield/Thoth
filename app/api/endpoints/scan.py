@@ -17,7 +17,8 @@ async def scan(file: UploadFile = File(...)):
        cupon_response = receipt_service.process_cupon(content)
        return {
         "length_before_pre-processing": len(content),
-        "length_after_pre-processing": len(cupon_response)
+        "length_after_pre-processing": len(cupon_response),
+        "cupon_response": cupon_response
        }
     except Exception as e:
         return {"error": str(e)}

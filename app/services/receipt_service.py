@@ -11,15 +11,16 @@ class ReceiptService:
     def process_cupon(self, cupon : bytes) -> dict:
         img_processed_qrcode = self.__processor.process_to_qrcode(cupon)
         qrcode_data = self.__get_by_qrcode(img_processed_qrcode)
+
         if qrcode_data:
             return {"data": qrcode_data, "message": "QR code detected successfully"}
         
-        #Ainda é necessário a lógica do ocr e extração
-        img_processed_ocr = self.__get_by_ocr(cupon)
-        ocr_data = self.__get_by_ocr(cupon)
-        ## Após isso ele extrai os dados do ocr
+        img_processed_ocr = self.__processor.process_to_ocr(cupon)
+        ocr_data = self.__get_by_ocr(img_processed_ocr)
+
         if ocr_data:
             return {"data": ocr_data, "message": "Ocr engine processed successfully"}
+
         return {"data": None, "message": "Ocr engine not processed"}
 
     def __get_by_qrcode(self, img_processed_qrcode : bytes):

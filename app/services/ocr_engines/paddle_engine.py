@@ -5,11 +5,11 @@ from app.services.ocr_engines.ocr_engine import OcrEngine
 
 class PaddleEngine(OcrEngine):
     def __init__(self):
-        # use_angle_cls=True detecta se o cupom está de cabeça para baixo ou girado
+        # use_angle_cls=True detects if the receipt is upside down or rotated
         self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='pt', show_log=False)
 
     def process(self, image):
-        # 1. OCR Bruto
+        # 1. Raw OCR
         try:
             result = self.ocr_engine.ocr(image, cls=True)
         except Exception as e:
@@ -18,151 +18,151 @@ class PaddleEngine(OcrEngine):
         if not result or result[0] is None:
             return {"itens": []}
 
-        # 2. Agrupamento Inteligente de Linhas (Corrige o "amassado" do papel)
-        linhas_organizadas = self._organizar_linhas_por_y(result[0])
+        # 2. Intelligent Line Grouping (Fixes paper "wrinkling")
+        organized_lines = self._organize_lines_by_y(result[0])
 
-        # 3. Extração baseada em Ancoragem de Preço
-        itens = self._extrair_itens_generico(linhas_organizadas)
+        # 3. Price-anchored Extraction
+        items = self._extract_items_generic(organized_lines)
 
-        return {"itens": itens}
+        return {"itens": items}
 
-    def _organizar_linhas_por_y(self, raw_result, threshold_y=10):
+    def _organize_lines_by_y(self, raw_result, threshold_y=10):
         """
-        Agrupa palavras que estão na mesma altura (mesma linha visual),
-        mesmo que o papel esteja levemente torto.
+        Groups words that are at the same height (same visual line),
+        even if the paper is slightly tilted.
         """
-        # Extrai dados: [texto, y_centro, x_min]
-        palavras = []
+        # Extracts data: [text, y_center, x_min]
+        words = []
         for line in raw_result:
             box = line[0]
-            texto = line[1][0]
-            y_centro = (box[0][1] + box[2][1]) / 2
+            text = line[1][0]
+            y_center = (box[0][1] + box[2][1]) / 2
             x_min = box[0][0]
-            palavras.append({'text': texto, 'y': y_centro, 'x': x_min})
+            words.append({'text': text, 'y': y_center, 'x': x_min})
 
-        # Ordena por Y (altura)
-        palavras.sort(key=lambda k: k['y'])
+        # Sorts by Y (height)
+        words.sort(key=lambda k: k['y'])
 
-        linhas = []
-        if not palavras: return []
+        lines = []
+        if not words: return []
 
-        linha_atual = [palavras[0]]
+        current_line = [words[0]]
         
-        for i in range(1, len(palavras)):
-            p = palavras[i]
-            prev = linha_atual[-1]
+        for i in range(1, len(words)):
+            p = words[i]
+            prev = current_line[-1]
 
-            # Se a diferença de altura for pequena, é a mesma linha
+            # If height difference is small, it's the same line
             if abs(p['y'] - prev['y']) < threshold_y:
-                linha_atual.append(p)
+                current_line.append(p)
             else:
-                # Nova linha detectada: ordena a anterior por X (esquerda p/ direita) e salva
-                linha_atual.sort(key=lambda k: k['x'])
-                linhas.append(linha_atual)
-                linha_atual = [p]
+                # New line detected: sorts the previous one by X (left to right) and saves
+                current_line.sort(key=lambda k: k['x'])
+                lines.append(current_line)
+                current_line = [p]
         
-        # Adiciona a última
-        linha_atual.sort(key=lambda k: k['x'])
-        linhas.append(linha_atual)
+        # Adds the last one
+        current_line.sort(key=lambda k: k['x'])
+        lines.append(current_line)
 
-        return linhas
+        return lines
 
-    def _extrair_itens_generico(self, linhas):
-        itens_finais = []
-        buffer_descricao = []
+    def _extract_items_generic(self, lines):
+        final_items = []
+        description_buffer = []
         
-        # Regex poderosos
-        # Captura dinheiro: 1.000,00 ou 10,50
-        re_monetario = r'(\d{1,3}(?:\.?\d{3})*,\d{2})'
-        # Captura quantidade: 2 UN, 2,500 KG, ou apenas "2" isolado antes de UN
-        re_qtd = r'(\d+(?:[.,]\d+)?)\s*(UN|PC|KG|L|M|M2|CX)?'
+        # Powerful regex
+        # Captures money: 1.000,00 or 10,50
+        re_monetary = r'(\d{1,3}(?:\.?\d{3})*,\d{2})'
+        # Captures quantity: 2 UN, 2,500 KG, or just "2" isolated before UN
+        re_qty = r'(\d+(?:[.,]\d+)?)\s*(UN|PC|KG|L|M|M2|CX)?'
 
-        # Palavras para ignorar (Cabeçalho/Rodapé)
+        # Words to ignore (Header/Footer)
         blacklist = ["TOTAL", "SUBTOTAL", "TROCO", "DINHEIRO", "CARTAO", "CREDITO", "DEBITO", "CNPJ", "CPF", "PAGAR", "TRIB", "SOMA"]
 
-        for linha_objs in linhas:
-            # Reconstrói a linha de texto
-            texto_linha = " ".join([p['text'] for p in linha_objs]).upper()
+        for line_objs in lines:
+            # Reconstructs the text line
+            line_text = " ".join([p['text'] for p in line_objs]).upper()
             
-            # Pula linhas de lixo (cabeçalho/rodapé óbvios)
-            if any(b in texto_linha for b in blacklist):
-                buffer_descricao = [] # Limpa buffer por segurança
+            # Skips garbage lines (obvious header/footer)
+            if any(b in line_text for b in blacklist):
+                description_buffer = [] # Clears buffer for safety
                 continue
 
-            # Busca valores monetários na linha
-            valores = re.findall(re_monetario, texto_linha)
+            # Searches for monetary values in the line
+            values = re.findall(re_monetary, line_text)
             
-            # --- LÓGICA DE DECISÃO ---
+            # --- DECISION LOGIC ---
             
-            # CENÁRIO A: Linha de Fechamento de Item (Tem preço no final)
-            # Geralmente o último valor da linha é o Total do Item
-            if valores:
-                valor_total = self._parse_float(valores[-1])
+            # SCENARIO A: Item Closing Line (Has price at the end)
+            # Usually the last value in the line is the Item Total
+            if values:
+                total_value = self._parse_float(values[-1])
                 
-                # Se o valor for muito alto (ex: chave de acesso que parece dinheiro) ou zero, ignora
-                if valor_total <= 0 or valor_total > 50000: 
-                    buffer_descricao.append(texto_linha)
+                # If value is too high (e.g., access key that looks like money) or zero, ignore
+                if total_value <= 0 or total_value > 50000:
+                    description_buffer.append(line_text)
                     continue
 
-                # Tenta achar unitário e quantidade na mesma linha
-                qtd = 1.0
-                unitario = valor_total
+                # Tries to find unit price and quantity on the same line
+                qty = 1.0
+                unit_price = total_value
 
-                # Remove os valores monetários do texto para sobrar a descrição/qtd
-                texto_sem_preco = re.sub(re_monetario, '', texto_linha)
+                # Removes monetary values from text to leave description/qty
+                text_without_price = re.sub(re_monetary, '', line_text)
                 
-                # Busca quantidade (ex: "2 UN")
-                match_qtd = re.search(re_qtd, texto_sem_preco)
-                if match_qtd:
+                # Searches for quantity (e.g., "2 UN")
+                match_qty = re.search(re_qty, text_without_price)
+                if match_qty:
                     try:
-                        qtd_raw = match_qtd.group(1).replace(',', '.')
-                        qtd = float(qtd_raw)
-                        # Se achou qtd, tenta deduzir unitário
-                        if len(valores) >= 2:
-                            unitario = self._parse_float(valores[-2]) # Penúltimo valor é o unitário
+                        qty_raw = match_qty.group(1).replace(',', '.')
+                        qty = float(qty_raw)
+                        # If qty found, tries to deduce unit price
+                        if len(values) >= 2:
+                            unit_price = self._parse_float(values[-2]) # Second to last value is the unit price
                         else:
-                            unitario = round(valor_total / qtd, 4) if qtd > 0 else valor_total
+                            unit_price = round(total_value / qty, 4) if qty > 0 else total_value
                     except:
                         pass
 
-                # Se a linha atual tem pouco texto (só numeros), a descrição está no buffer
-                # Se a linha atual tem texto (ex: "COCA COLA 2L ... 10,00"), ela é a descrição
+                # If current line has little text (only numbers), description is in buffer
+                # If current line has text (e.g., "COCA COLA 2L ... 10,00"), it is the description
                 
-                parte_texto = re.sub(r'[\d.,]+', '', texto_linha).strip()
+                text_part = re.sub(r'[\d.,]+', '', line_text).strip()
                 
-                desc_final = ""
-                if len(parte_texto) > 3:
-                    # Descrição está na própria linha do preço
-                    desc_final = (" ".join(buffer_descricao) + " " + texto_linha).strip()
+                final_desc = ""
+                if len(text_part) > 3:
+                    # Description is on the price line itself
+                    final_desc = (" ".join(description_buffer) + " " + line_text).strip()
                 else:
-                    # Descrição está toda nas linhas anteriores (caso do seu cupom DECA)
-                    desc_final = " ".join(buffer_descricao).strip()
-                    # Adiciona o código do produto se estiver na linha do preço (ex: "30804")
-                    codigos = re.findall(r'\b\d{4,14}\b', texto_linha) 
-                    if codigos: desc_final = f"{codigos[0]} {desc_final}"
+                    # Description is all in previous lines (case of DECA receipt)
+                    final_desc = " ".join(description_buffer).strip()
+                    # Adds product code if it's on the price line (e.g., "30804")
+                    codes = re.findall(r'\b\d{4,14}\b', line_text)
+                    if codes: final_desc = f"{codes[0]} {final_desc}"
 
-                # Limpeza final da descrição (tira preços e quantidades que sobraram no texto)
-                desc_final = re.sub(re_monetario, '', desc_final)
-                desc_final = re.sub(r'\b\d+(?:[.,]\d+)?\s*(UN|KG|PC)\b', '', desc_final).strip()
+                # Final description cleanup (removes prices and quantities that remained in text)
+                final_desc = re.sub(re_monetary, '', final_desc)
+                final_desc = re.sub(r'\b\d+(?:[.,]\d+)?\s*(UN|KG|PC)\b', '', final_desc).strip()
 
-                if desc_final:
-                    itens_finais.append({
-                        "descricao": desc_final,
-                        "quantidade": qtd,
-                        "preco_unitario": unitario,
-                        "total": valor_total
+                if final_desc:
+                    final_items.append({
+                        "descricao": final_desc,
+                        "quantidade": qty,
+                        "preco_unitario": unit_price,
+                        "total": total_value
                     })
                 
-                # Reseta buffer pois fechamos um item
-                buffer_descricao = []
+                # Resets buffer because we closed an item
+                description_buffer = []
 
-            # CENÁRIO B: Linha de Descrição (Sem preço)
+            # SCENARIO B: Description Line (No price)
             else:
-                # Apenas acumula texto, ignorando números soltos inúteis
-                if len(texto_linha) > 2:
-                    buffer_descricao.append(texto_linha)
+                # Just accumulates text, ignoring useless isolated numbers
+                if len(line_text) > 2:
+                    description_buffer.append(line_text)
 
-        return itens_finais
+        return final_items
 
     def _parse_float(self, val_str):
         try:

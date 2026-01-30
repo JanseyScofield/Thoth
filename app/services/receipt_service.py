@@ -11,17 +11,17 @@ class ReceiptService:
         self.__pdf_processor = pdfProcessor
         self.__qrcode_detector = cv2.QRCodeDetector()
 
-    def process_cupon(self, content: bytes) -> dict:
+    def process_receipt(self, content: bytes) -> dict:
         result = None
         
-        # 1. Normalização: Tudo vira uma lista de matrizes
+        # 1. Normalization: Everything becomes a list of matrices
         imgs_matrices = []
         
         if self.__pdf_processor.is_pdf(content):
-            # Retorna lista de matrizes BGR
+            # Returns list of BGR matrices
             imgs_matrices = self.__pdf_processor.process_to_images(content)
         else:
-            # Converte bytes únicos para uma lista com 1 matriz
+            # Converts single bytes to a list with 1 matrix
             matrix = self.__processor.bytes_to_matrix(content)
             if matrix is not None:
                 imgs_matrices = [matrix]
@@ -29,50 +29,50 @@ class ReceiptService:
         if not imgs_matrices:
             return {"data": None, "message": "Could not process file or empty PDF"}
 
-        # 2. Processamento Unificado
+        # 2. Unified Processing
         result = self.__process_images_list(imgs_matrices)
 
-        if result is None: 
+        if result is None:
             return {"data": None, "message": "Data not processed"}
-        else: 
+        else:
             return {"data": result["data"], "type": result["type"], "message": "Data processed successfully"}
 
     def __process_images_list(self, imgs: list) -> dict:
-        # Tenta QR Code na primeira e última página (otimização para PDFs longos)
+        # Try QR Code on first and last page (optimization for long PDFs)
         qrcode_data = self.__try_process_qrcode(imgs[0])
         if qrcode_data is None and len(imgs) > 1:
             qrcode_data = self.__try_process_qrcode(imgs[-1])
 
-        if qrcode_data: 
+        if qrcode_data:
             return {"data": qrcode_data, "type": "qrcode_data"}
 
-        # Se não achou QR, faz OCR em todas as páginas (ou filtra as melhores)
+        # If QR not found, perform OCR on all pages (or filter the best ones)
         data = []
         for img in imgs:
             ocr_result = self.__process_single_img_ocr(img)
             if ocr_result:
                 data.extend(ocr_result)
 
-        if not data: 
+        if not data:
             return None
             
         return {"data": data, "type": "ocr_data"}
 
     def __process_single_img_ocr(self, img_matrix) -> list:
-        # Aqui corrigimos o erro: passamos a matriz, não bytes, e chamamos o método certo
+        # Here we fix the error: we pass the matrix, not bytes, and call the correct method
         img_processed_ocr = self.__processor.process_matrix_to_ocr(img_matrix)
         
         ocr_response = self.__ocr_engine.process(img_processed_ocr)
         
-        # O engine retorna {'itens': [...]}, pegamos apenas a lista
+        # The engine returns {'itens': [...]}, we only get the list
         if ocr_response and 'itens' in ocr_response:
             return ocr_response['itens']
         return []
 
     def __try_process_qrcode(self, img_matrix) -> dict:
-        # Prepara matriz para QR Code
+        # Prepares matrix for QR Code
         img_processed = self.__processor.process_matrix_to_qrcode(img_matrix)
         
-        # Detecta
+        # Detects
         qrcode_data, points, _ = self.__qrcode_detector.detectAndDecode(img_processed)
         return qrcode_data if qrcode_data else None

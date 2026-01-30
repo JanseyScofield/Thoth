@@ -4,11 +4,13 @@ from fastapi import APIRouter, File, UploadFile
 from app.services.receipt_service import ReceiptService
 from app.services.ocr_engines.paddle_engine import PaddleEngine
 from app.services.processors.image_processor import ImageProcessor
+from app.services.processors.pdf_processor import PdfProcessor
 
 router = APIRouter()
 ocr_engine = PaddleEngine()
 processor = ImageProcessor()
-receipt_service  = ReceiptService(ocr_engine=ocr_engine, processor=processor)
+pdf_processor = PdfProcessor()
+receipt_service  = ReceiptService(ocr_engine=ocr_engine, processor=processor, pdfProcessor=pdf_processor)
 
 @router.post("/scan")
 async def scan(file: UploadFile = File(...)):
